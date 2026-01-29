@@ -28,6 +28,7 @@ class EncoderLayer:
         self.attn_bias = attn_bias
         self.ffn_bias = ffn_bias
         self.eps = eps
+        self.training = True
 
         self.self_attn = MultiHeadAttention(d_model=d_model, heads=heads, bias=attn_bias)
         
@@ -51,8 +52,8 @@ class EncoderLayer:
         
         self.dropout2 = Dropout(p=dropout_p)
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
-        return self.forward(x)
+    def __call__(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.forward(x, mask)
 
     def forward(
             self,
@@ -112,4 +113,8 @@ class EncoderLayer:
         return self.train(False)
     
     def to(self, device: torch.device):
-        self.self_attn.to(device)
+        self.self_attn.to(device).detach().requires_grad_(True)
+        self.norm1.to(device).detach().requires_grad_(True)
+        self.ffn.to(device).detach().requires_grad_(True)
+        self.norm2.to(device).detach().requires_grad_(True)
+        return self

@@ -92,3 +92,4 @@ class PositionWiseFeedForward:
             self.b1 = self.b1.to(device).detach().requires_grad_(True)
         if self.b2 is not None:
             self.b2 = self.b2.to(device).detach().requires_grad_(True)
+        return self
