@@ -69,7 +69,8 @@ class EncoderLayer:
             query=x,
             key=x,
             value=x,
-            mask=mask
+            key_padding_mask=mask,
+            attn_mask=None
         )
 
         # Add & Norm
