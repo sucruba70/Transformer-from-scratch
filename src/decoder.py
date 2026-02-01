@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import torch
@@ -8,7 +9,7 @@ from src.layers import LayerNorm, Dropout
 from src.embeddings import Embedding, PositionalEncoding
 
 
-class EncoderLayer:
+class DecoderLayer:
     def __init__(
             self,
             d_model: int,
@@ -23,7 +24,7 @@ class EncoderLayer:
     ):
         self.training = True
 
-        self.self_attn = MultiHeadAttention(d_model=d_model, heads=heads, bias=attn_bias)  
+        self.masked_attn = MultiHeadAttention(d_model=d_model, heads=heads, bias=attn_bias)
         self.norm1 = LayerNorm(
             normalized_shape=d_model,
             eps=eps,
@@ -31,8 +32,8 @@ class EncoderLayer:
             bias=ln_bias,
         )
         self.dropout1 = Dropout(p=dropout_p)
-        
-        self.ffn = PositionWiseFeedForward(d_model=d_model, d_ff=d_ff, dropout_p=dropout_p, bias=ffn_bias)
+
+        self.cross_attn = MultiHeadAttention(d_model=d_model, heads=heads, bias=attn_bias)
         self.norm2 = LayerNorm(
             normalized_shape=d_model,
             eps=eps,
@@ -41,72 +42,111 @@ class EncoderLayer:
         )
         self.dropout2 = Dropout(p=dropout_p)
 
-    def __call__(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.forward(x, key_padding_mask)
+        self.ffn = PositionWiseFeedForward(d_model=d_model, d_ff=d_ff, dropout_p=dropout_p, bias=ffn_bias)
+        self.norm3 = LayerNorm(
+            normalized_shape=d_model,
+            eps=eps,
+            elementwise_affine=elementwise_affine,
+            bias=ln_bias,
+        )
+        self.dropout3 = Dropout(p=dropout_p)
 
+    def __call__(
+            self,
+            x: torch.Tensor,
+            memory: torch.Tensor,
+            tgt_key_padding_mask: Optional[torch.Tensor] = None,
+            memory_key_padding_mask: Optional[torch.Tensor] = None,
+            tgt_attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        return self.forward(x, memory, tgt_key_padding_mask, memory_key_padding_mask, tgt_attn_mask)
+    
     def forward(
             self,
             x: torch.Tensor,
-            key_padding_mask: Optional[torch.Tensor] = None
+            memory: torch.Tensor,
+            tgt_key_padding_mask: Optional[torch.Tensor] = None,
+            memory_key_padding_mask: Optional[torch.Tensor] = None,
+            tgt_attn_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # Multi-Head Attention
-        # [B, L, d_model] -> [B, L, d_model]
+        
+        # Masked Multi-Head Attention
         residual = x
-        attn_output = self.self_attn(
+        masked_attn_output = self.masked_attn(
             query=x,
             key=x,
             value=x,
-            key_padding_mask=key_padding_mask,
-            attn_mask=None
+            key_padding_mask=tgt_key_padding_mask,
+            attn_mask=tgt_attn_mask,
         )
         # Add & Norm
-        x = self.norm1(residual + self.dropout1(attn_output))
+        x = self.norm1(residual + self.dropout1(masked_attn_output))
+        
+        # Cross Multi-Head Attention
+        residual = x
+        cross_attn_output = self.cross_attn(
+            query=x,
+            key=memory,
+            value=memory,
+            key_padding_mask=memory_key_padding_mask,
+            attn_mask=None,
+        )
+        # Add & Norm
+        x = self.norm2(residual + self.dropout2(cross_attn_output))
 
         # FFN
-        # [B, L, d_model] -> [B, L, d_ff] -> [B, L, d_model]
         residual = x
         ffn_output = self.ffn(x)
         # Add & Norm
-        x = self.norm2(residual + self.dropout2(ffn_output))
+        x = self.norm3(residual + self.dropout3(ffn_output))
 
         return x
     
     def parameters(self):
         params = []
-        params.extend(self.self_attn.parameters())
+        params.extend(self.masked_attn.parameters())
         params.extend(self.norm1.parameters())
-        params.extend(self.ffn.parameters())
+        params.extend(self.cross_attn.parameters())
         params.extend(self.norm2.parameters())
-
+        params.extend(self.ffn.parameters())
+        params.extend(self.norm3.parameters())
         return params
 
-    def zero_grad(self):
-        for p in self.parameters():
-            if p.grad is not None:
-                p.grad.zero_()
-    
     def train(self, mode: bool = True):
         self.training = mode
-        self.self_attn.train(mode)
-        self.dropout1.train(mode)
-        self.ffn.train(mode)
-        self.dropout2.train(mode)
+
+        self.masked_attn.train(mode)
         self.norm1.train(mode)
+        self.dropout1.train(mode)
+
+        self.cross_attn.train(mode)
         self.norm2.train(mode)
+        self.dropout2.train(mode)
+
+        self.ffn.train(mode)
+        self.norm3.train(mode)
+        self.dropout3.train(mode)
         return self
     
     def eval(self):
         return self.train(False)
-    
+
     def to(self, device: torch.device):
-        self.self_attn.to(device)
+        self.masked_attn.to(device)
         self.norm1.to(device)
-        self.ffn.to(device)
+        self.cross_attn.to(device)
         self.norm2.to(device)
+        self.ffn.to(device)
+        self.norm3.to(device)
         return self
+    
+    def zero_grad(self):
+        for param in self.parameters():
+            if param.grad is not None:
+                param.grad.zero_()
 
 
-class Encoder:
+class Decoder:
     def __init__(
         self,
         num_embeddings: int = 30000,
@@ -125,15 +165,16 @@ class Encoder:
         self.embedding = Embedding(
             num_embeddings=num_embeddings,
             embedding_dim=d_model,
-            padding_idx = 0,
+            padding_idx=0,
         )
         self.positional_encoding = PositionalEncoding(
             d_model=d_model,
             max_len=max_len,
             dropout=dropout_p
         )
+
         self.layers = [
-            EncoderLayer(
+            DecoderLayer(
                 d_model=d_model,
                 heads=heads,
                 d_ff=d_ff,
@@ -146,22 +187,42 @@ class Encoder:
             )
             for _ in range(num_layers)
         ]
-        self.training = True
     
-    def __call__(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.forward(x, key_padding_mask)
+    def __call__(
+        self,
+        x: torch.Tensor,
+        memory: torch.Tensor,
+        tgt_key_padding_mask: Optional[torch.Tensor] = None,
+        memory_key_padding_mask: Optional[torch.Tensor] = None,
+        tgt_attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        return self.forward(x, memory, tgt_key_padding_mask, memory_key_padding_mask, tgt_attn_mask)
 
-    def forward(self, x: torch.Tensor, key_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # x: [B, L] -> [B, L, d_model]
+    def forward(
+            self,
+            x: torch.Tensor,
+            memory: torch.Tensor,
+            tgt_key_padding_mask: Optional[torch.Tensor] = None,
+            memory_key_padding_mask: Optional[torch.Tensor] = None,
+            tgt_attn_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        # Embedding
         x = self.embedding(x)
-        # [B, L, d_model] -> [B, L, d_model]
+        # Positional Encoding
         x = self.positional_encoding(x)
 
-        # [B, L, d_model] -> [B, L, d_model]
+        # Decoder Layer
         for layer in self.layers:
-            x = layer(x, key_padding_mask=key_padding_mask)
-        return x
+            x = layer(
+                x=x,
+                memory=memory,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+                tgt_attn_mask=tgt_attn_mask
+            )
 
+        return x
+        
     def parameters(self):
         params = []
         params.extend(self.embedding.parameters())

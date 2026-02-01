@@ -1,4 +1,7 @@
+import math
+
 import torch
+
 
 class LayerNorm:
     def __init__(
@@ -134,3 +137,45 @@ class ReLU:
 
     def eval(self):
         return self
+
+
+class Linear:
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+    ):
+        self.weight = torch.randn(in_features, out_features) / math.sqrt(in_features)
+        self.weight.requires_grad_()
+        self.bias = torch.zeros(out_features, requires_grad=True)
+
+        self.training = True
+    
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward(x)
+
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
+        x = torch.matmul(x, self.weight)
+        x = x + self.bias
+        return x
+
+    def parameters(self):
+        params = [self.weight, self.bias]
+        return params
+    
+    def train(self, mode: bool = True):
+        self.training = mode
+        return self
+
+    def eval(self):
+        return self.train(False)
+    
+    def to(self, device: torch.Tensor):
+        self.weight = self.weight.to(device).detach().requires_grad_(True)
+        self.bias = self.bias.to(device).detach().requires_grad_(True)
+        return self
+    
+    def zero_grad(self):
+        for p in self.parameters():
+            if p.grad is not None:
+                p.grad.zero_()
