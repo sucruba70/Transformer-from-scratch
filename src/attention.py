@@ -19,14 +19,15 @@ class MultiHeadAttention:
         self.head_dim = d_model // heads
         self.training = True
 
-        scale = math.sqrt(d_model)
-        self.w_q = torch.randn(d_model, d_model) / scale
-        self.w_k = torch.randn(d_model, d_model) / scale
-        self.w_v = torch.randn(d_model, d_model) / scale
-        self.w_o = torch.randn(d_model, d_model) / scale
-
-        for param in [self.w_q, self.w_k, self.w_v, self.w_o]:
-            param.requires_grad = True
+        self.scale = math.sqrt(d_model)
+        self.w_q = torch.randn(d_model, d_model) / self.scale
+        self.w_q.requires_grad_()
+        self.w_k = torch.randn(d_model, d_model) / self.scale
+        self.w_k.requires_grad_()
+        self.w_v = torch.randn(d_model, d_model) / self.scale
+        self.w_v.requires_grad_()
+        self.w_o = torch.randn(d_model, d_model) / self.scale
+        self.w_o.requires_grad_()
 
         if bias:
             self.b_q = torch.zeros(d_model, requires_grad=True)
@@ -60,10 +61,10 @@ class MultiHeadAttention:
             q = q + self.b_q
         k = torch.matmul(key, self.w_k)
         if self.b_k is not None:
-            q = q + self.b_k
+            k = k + self.b_k
         v = torch.matmul(value, self.w_v)
         if self.b_v is not None:
-            q = q + self.b_v
+            v = v + self.b_v
 
         # [B,L,d_model] -> [B,L,heads,d_heads] -> [B,heads,L,d_heads]
         q = q.view(batch_size, -1, self.heads, self.head_dim).transpose(1,2)
@@ -101,8 +102,9 @@ class MultiHeadAttention:
         
         return params
     
-    def train(self) -> None:
-        self.training = True
+    def train(self, mode: bool = True):
+        self.training = mode
+        return self
 
     def eval(self) -> None:
         self.training = False

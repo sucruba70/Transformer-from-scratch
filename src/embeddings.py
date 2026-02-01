@@ -1,6 +1,58 @@
+from typing import Optional
+import math
+
 import torch
 
 from src.layers import Dropout
+
+
+class Embedding:
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: Optional[int] = None,
+    ):
+        if padding_idx is not None:
+            if not (0 <= padding_idx < num_embeddings):
+                raise ValueError("padding_idx must be in [0, num_embeddings)")
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.padding_idx = padding_idx
+        self.training = True
+
+        self.scale = math.sqrt(embedding_dim)
+        self.weight = torch.randn(num_embeddings, embedding_dim) / self.scale
+        self.weight.requires_grad_()
+
+        if self.padding_idx is not None:
+            with torch.no_grad():
+                self.weight[self.padding_idx].zero_()
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # [B,L] -> [B,L,embedding_dim]
+        return self.weight[x]
+
+    def parameters(self):
+        return [self.weight]
+    
+    def train(self, mode: bool = True):
+        self.training = mode
+        return self
+    
+    def eval(self):
+        return self.train(False)
+
+    def to(self, device: torch.device):
+        self.weight = self.weight.to(device).detach().requires_grad_(True)
+        return self
+    
+    def zero_grad(self):
+        if self.weight.grad is not None:
+            self.weight.grad.zero_()
 
 
 class PositionalEncoding:

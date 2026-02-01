@@ -54,6 +54,13 @@ class LayerNorm:
             return [self.gamma]
         return [self.gamma, self.beta]
 
+    def to(self, device: torch.device):
+        if self.gamma is not None:
+            self.gamma = self.gamma.to(device).detach().requires_grad_(True)
+        if self.beta is not None:
+            self.beta = self.beta.to(device).detach().requires_grad_(True)
+        return self
+
     def zero_grad(self) -> None:
         for param in self.parameters():
             if param.grad is not None:
